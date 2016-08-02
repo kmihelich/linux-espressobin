@@ -3184,10 +3184,14 @@ int mv88e6xxx_mdio_page_write(struct dsa_switch *ds, int port, int page,
 }
 
 static int mv88e6xxx_port_to_mdio_addr(struct mv88e6xxx_priv_state *ps,
-				       int port)
+										int port)
 {
-	if (port >= 0 && port < ps->info->num_ports)
-		return port;
+	if (port >= 0 && port < ps->info->num_ports) {
+		if (mv88e6xxx_has(ps, MV88E6XXX_FLAG_PHY_ADDR))
+			return (port + 0x10);
+		else
+			return port;
+	}
 	return -EINVAL;
 }
 
@@ -3274,6 +3278,7 @@ static int mv88e6xxx_mdio_register(struct mv88e6xxx_priv_state *ps,
 		dev_err(ps->dev, "Cannot register MDIO bus (%d)\n", err);
 		goto out;
 	}
+
 	ps->mdio_bus = bus;
 
 	return 0;
@@ -3584,6 +3589,14 @@ static const struct mv88e6xxx_info mv88e6xxx_table[] = {
 		.num_ports = 7,
 		.flags = MV88E6XXX_FLAGS_FAMILY_6352,
 	},
+	[MV88E6341] = {
+		.prod_num = PORT_SWITCH_ID_PROD_NUM_6341,
+		.family = MV88E6XXX_FAMILY_6352,
+		.name = "Marvell 88E6341",
+		.num_databases = 4096,
+		.num_ports = 6,
+		.flags = MV88E6XXX_FLAGS_FAMILY_6352 | MV88E6XXX_FLAG_PHY_ADDR,
+	},
 };
 
 static const struct mv88e6xxx_info *
@@ -3637,7 +3650,6 @@ static const char *mv88e6xxx_drv_probe(struct device *dsa_dev,
 	ps->info = info;
 	ps->dev = dsa_dev;
 	mutex_init(&ps->smi_mutex);
-
 	err = mv88e6xxx_mdio_register(ps, NULL);
 	if (err)
 		return NULL;

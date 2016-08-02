@@ -83,6 +83,7 @@
 #define PORT_SWITCH_ID_PROD_NUM_6185	0x1a7
 #define PORT_SWITCH_ID_PROD_NUM_6240	0x240
 #define PORT_SWITCH_ID_PROD_NUM_6321	0x310
+#define PORT_SWITCH_ID_PROD_NUM_6341	0x340
 #define PORT_SWITCH_ID_PROD_NUM_6352	0x352
 #define PORT_SWITCH_ID_PROD_NUM_6350	0x371
 #define PORT_SWITCH_ID_PROD_NUM_6351	0x375
@@ -358,6 +359,7 @@ enum mv88e6xxx_model {
 	MV88E6350,
 	MV88E6351,
 	MV88E6352,
+	MV88E6341,
 };
 
 enum mv88e6xxx_family {
@@ -433,6 +435,12 @@ enum mv88e6xxx_cap {
 	 * The VTU is used to program 802.1Q VLANs. See GLOBAL_VTU_OP.
 	 */
 	MV88E6XXX_CAP_VTU,
+
+	/* Switch internal PHY SMI address convertion.
+	 * Most of switch internal PHY SMI address are equal to switch port ID
+	 * However Some switch internal PHY SMI addressis are (0x10 + port ID)
+	 */
+	MV88E6XXX_PHY_ADDR_CONVERT,
 };
 
 /* Bitmask of capabilities */
@@ -449,6 +457,8 @@ enum mv88e6xxx_cap {
 #define MV88E6XXX_FLAG_TEMP_LIMIT	BIT(MV88E6XXX_CAP_TEMP_LIMIT)
 #define MV88E6XXX_FLAG_VLANTABLE	BIT(MV88E6XXX_CAP_VLANTABLE)
 #define MV88E6XXX_FLAG_VTU		BIT(MV88E6XXX_CAP_VTU)
+#define MV88E6XXX_FLAG_PHY_ADDR	BIT(MV88E6XXX_PHY_ADDR_CONVERT)
+
 
 #define MV88E6XXX_FLAGS_FAMILY_6095	\
 	(MV88E6XXX_FLAG_ATU |		\
