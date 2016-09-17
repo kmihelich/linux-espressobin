@@ -12,6 +12,7 @@
 
 #include <linux/kernel.h>
 #include <linux/clk-provider.h>
+#include <linux/clk.h>
 #include <linux/of_address.h>
 #include <linux/slab.h>
 #include <linux/delay.h>
@@ -69,6 +70,11 @@ static struct clk_onecell_data clk_data;
  */
 static const struct clk_corediv_desc mvebu_corediv_desc[] = {
 	{ .mask = 0x3f, .offset = 8, .fieldbit = 1 }, /* NAND clock */
+};
+
+static const struct clk_corediv_desc mvebu_msys_corediv_desc[] __initconst = {
+	/* NAND clock */
+	{ .mask = 0xf, .offset = 6, .fieldbit = 27},
 };
 
 #define to_corediv_clk(p) container_of(p, struct clk_corediv, hw)
@@ -135,14 +141,9 @@ static unsigned long clk_corediv_recalc_rate(struct clk_hw *hwclk,
 static long clk_corediv_round_rate(struct clk_hw *hwclk, unsigned long rate,
 			       unsigned long *parent_rate)
 {
-	/* Valid ratio are 1:4, 1:5, 1:6 and 1:8 */
 	u32 div;
 
-	div = *parent_rate / rate;
-	if (div < 4)
-		div = 4;
-	else if (div > 6)
-		div = 8;
+	div = DIV_ROUND_UP(*parent_rate, rate);
 
 	return *parent_rate / div;
 }
@@ -232,6 +233,18 @@ static const struct clk_corediv_soc_desc armada375_corediv_soc = {
 	.ratio_offset = 0x4,
 };
 
+static const struct clk_corediv_soc_desc msys_corediv_soc = {
+	.descs = mvebu_msys_corediv_desc,
+	.ndescs = ARRAY_SIZE(mvebu_msys_corediv_desc),
+	.ops = {
+		.recalc_rate = clk_corediv_recalc_rate,
+		.round_rate = clk_corediv_round_rate,
+		.set_rate = clk_corediv_set_rate,
+	},
+	.ratio_reload = BIT(10),
+	.ratio_offset = 0x8,
+};
+
 static void __init
 mvebu_corediv_clk_init(struct device_node *node,
 		       const struct clk_corediv_soc_desc *soc_desc)
@@ -239,6 +252,7 @@ mvebu_corediv_clk_init(struct device_node *node,
 	struct clk_init_data init;
 	struct clk_corediv *corediv;
 	struct clk **clks;
+	struct clk *clk;
 	void __iomem *base;
 	const char *parent_name;
 	const char *clk_name;
@@ -248,7 +262,15 @@ mvebu_corediv_clk_init(struct device_node *node,
 	if (WARN_ON(!base))
 		return;
 
-	parent_name = of_clk_get_parent_name(node, 0);
+	/* Msys SoC's do not use fixed PLL as parent clock */
+	if (of_device_is_compatible(node, "marvell,msys-corediv-clock")) {
+		clk = of_clk_get(node, 0);
+		if (IS_ERR(clk))
+			goto err_unmap;
+		parent_name = __clk_get_name(clk);
+		clk_put(clk);
+	} else
+		parent_name = of_clk_get_parent_name(node, 0);
 
 	clk_data.clk_num = soc_desc->ndescs;
 
@@ -313,3 +335,10 @@ static void __init armada380_corediv_clk_init(struct device_node *node)
 }
 CLK_OF_DECLARE(armada380_corediv_clk, "marvell,armada-380-corediv-clock",
 	       armada380_corediv_clk_init);
+
+static void __init mvebu_corediv_clk_msys_init(struct device_node *node)
+{
+	return mvebu_corediv_clk_init(node, &msys_corediv_soc);
+}
+CLK_OF_DECLARE(mvebu_corediv_msys_clk, "marvell,msys-corediv-clock",
+		  mvebu_corediv_clk_msys_init);

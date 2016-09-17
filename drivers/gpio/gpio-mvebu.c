@@ -663,13 +663,14 @@ static int mvebu_gpio_probe(struct platform_device *pdev)
 	struct irq_chip_type *ct;
 	struct clk *clk;
 	unsigned int ngpios;
+	unsigned int gpio_base = -1;
 	int soc_variant;
 	int i, cpu, id;
 	int err;
 
 	match = of_match_device(mvebu_gpio_of_match, &pdev->dev);
 	if (match)
-		soc_variant = (int) match->data;
+		soc_variant = (uintptr_t) match->data;
 	else
 		soc_variant = MVEBU_GPIO_SOC_VARIANT_ORION;
 
@@ -685,6 +686,9 @@ static int mvebu_gpio_probe(struct platform_device *pdev)
 		return -ENODEV;
 	}
 
+	if (of_property_read_u32(pdev->dev.of_node, "gpiobase", &gpio_base))
+		gpio_base = -1;
+
 	id = of_alias_get_id(pdev->dev.of_node, "gpio");
 	if (id < 0) {
 		dev_err(&pdev->dev, "Couldn't get OF id\n");
@@ -698,19 +702,22 @@ static int mvebu_gpio_probe(struct platform_device *pdev)
 
 	mvchip->soc_variant = soc_variant;
 	mvchip->chip.label = dev_name(&pdev->dev);
-	mvchip->chip.dev = &pdev->dev;
+	mvchip->chip.parent = &pdev->dev;
 	mvchip->chip.request = gpiochip_generic_request;
 	mvchip->chip.free = gpiochip_generic_free;
 	mvchip->chip.direction_input = mvebu_gpio_direction_input;
 	mvchip->chip.get = mvebu_gpio_get;
 	mvchip->chip.direction_output = mvebu_gpio_direction_output;
 	mvchip->chip.set = mvebu_gpio_set;
+	if (gpio_base != -1)
+		mvchip->chip.base = gpio_base;
+	else
+		mvchip->chip.base = id * MVEBU_MAX_GPIO_PER_BANK;
+	mvchip->chip.dbg_show = mvebu_gpio_dbg_show;
 	mvchip->chip.to_irq = mvebu_gpio_to_irq;
-	mvchip->chip.base = id * MVEBU_MAX_GPIO_PER_BANK;
 	mvchip->chip.ngpio = ngpios;
 	mvchip->chip.can_sleep = false;
 	mvchip->chip.of_node = np;
-	mvchip->chip.dbg_show = mvebu_gpio_dbg_show;
 
 	spin_lock_init(&mvchip->lock);
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);

@@ -47,6 +47,19 @@
 #define USB_PHY_IVREF_CTRL	0x440
 #define USB_PHY_TST_GRP_CTRL	0x450
 
+#define USB_SBUSCFG		0x90
+#define USB_SBUSCFG_BAWR_OFF	0x6
+#define USB_SBUSCFG_BARD_OFF	0x3
+#define USB_SBUSCFG_AHBBRST_OFF	0x0
+
+#define USB_SBUSCFG_BAWR_ALIGN_128B	0x3
+#define USB_SBUSCFG_BARD_ALIGN_128B	0x3
+#define USB_SBUSCFG_AHBBRST_INCR16	0x3
+
+#define USB_SBUSCFG_DEF_VAL	((USB_SBUSCFG_BAWR_ALIGN_128B << USB_SBUSCFG_BAWR_OFF) \
+				| (USB_SBUSCFG_BARD_ALIGN_128B << USB_SBUSCFG_BARD_OFF) \
+				| (USB_SBUSCFG_AHBBRST_INCR16 << USB_SBUSCFG_AHBBRST_OFF))
+
 #define DRIVER_DESC "EHCI orion driver"
 
 #define hcd_to_orion_priv(h) ((struct orion_ehci_hcd *)hcd_to_ehci(h)->priv)
@@ -59,6 +72,9 @@ struct orion_ehci_hcd {
 static const char hcd_name[] = "ehci-orion";
 
 static struct hc_driver __read_mostly ehci_orion_hc_driver;
+
+static u32 usb_save[(USB_IPG - USB_CAUSE) +
+		    (USB_PHY_TST_GRP_CTRL - USB_PHY_PWR_CTRL)];
 
 /*
  * Implement Orion USB controller specification guidelines
@@ -151,8 +167,33 @@ ehci_orion_conf_mbus_windows(struct usb_hcd *hcd,
 	}
 }
 
+static int ehci_orion_drv_reset(struct usb_hcd *hcd)
+{
+	struct device *dev = hcd->self.controller;
+	int retval;
+
+	retval = ehci_setup(hcd);
+	if (retval)
+		dev_err(dev, "ehci_setup failed %d\n", retval);
+
+	/* For SoC without hlock, need to program sbuscfg value to guarantee
+	 * AHB master's burst would not overrun or underrun FIFO.
+	 *
+	 * sbuscfg reg has to be set after usb controller reset, otherwise
+	 * the value would be override to 0.
+	 *
+	 * BAWR = BARD = 3 : Align read/write bursts packets larger than 128 bytes
+	 * AHBBRST = 3	   : Align AHB Burst to INCR16 (64 bytes)
+	 */
+	if (of_device_is_compatible(dev->of_node, "marvell,armada-3700-ehci"))
+		wrl(USB_SBUSCFG, USB_SBUSCFG_DEF_VAL);
+
+	return retval;
+}
+
 static const struct ehci_driver_overrides orion_overrides __initconst = {
 	.extra_priv_size =	sizeof(struct orion_ehci_hcd),
+	.reset = ehci_orion_drv_reset,
 };
 
 static int ehci_orion_drv_probe(struct platform_device *pdev)
@@ -308,8 +349,102 @@ static int ehci_orion_drv_remove(struct platform_device *pdev)
 	return 0;
 }
 
+static int ehci_orion_drv_suspend(struct platform_device *pdev,
+				  pm_message_t state)
+{
+	struct usb_hcd *hcd = platform_get_drvdata(pdev);
+
+	int addr, i;
+
+	for (addr = USB_CAUSE, i = 0; addr <= USB_IPG; addr += 0x4, i++)
+		usb_save[i] = readl_relaxed(hcd->regs + addr);
+
+	for (addr = USB_PHY_PWR_CTRL; addr <= USB_PHY_TST_GRP_CTRL;
+	     addr += 0x4, i++)
+		usb_save[i] = readl_relaxed(hcd->regs + addr);
+
+	return 0;
+}
+
+#define MV_USB_CORE_CMD_RESET_BIT           1
+#define MV_USB_CORE_CMD_RESET_MASK          (1 << MV_USB_CORE_CMD_RESET_BIT)
+#define MV_USB_CORE_MODE_OFFSET                 0
+#define MV_USB_CORE_MODE_MASK                   (3 << MV_USB_CORE_MODE_OFFSET)
+#define MV_USB_CORE_MODE_HOST                   (3 << MV_USB_CORE_MODE_OFFSET)
+#define MV_USB_CORE_MODE_DEVICE                 (2 << MV_USB_CORE_MODE_OFFSET)
+#define MV_USB_CORE_CMD_RUN_BIT             0
+#define MV_USB_CORE_CMD_RUN_MASK            (1 << MV_USB_CORE_CMD_RUN_BIT)
+
+static int ehci_orion_drv_resume(struct platform_device *pdev)
+{
+	struct usb_hcd *hcd = platform_get_drvdata(pdev);
+	int addr, regVal, i;
+
+	for (addr = USB_CAUSE, i = 0; addr <= USB_IPG; addr += 0x4, i++)
+		writel_relaxed(usb_save[i], hcd->regs + addr);
+
+	for (addr = USB_PHY_PWR_CTRL; addr <= USB_PHY_TST_GRP_CTRL;
+	     addr += 0x4, i++)
+		writel_relaxed(usb_save[i], hcd->regs + addr);
+
+	/* Clear Interrupt Cause and Mask registers */
+	writel_relaxed(0, hcd->regs + 0x310);
+	writel_relaxed(0, hcd->regs + 0x314);
+
+	/* Reset controller */
+	regVal = readl_relaxed(hcd->regs + 0x140);
+	writel_relaxed(regVal | MV_USB_CORE_CMD_RESET_MASK, hcd->regs + 0x140);
+	while (readl_relaxed(hcd->regs + 0x140) & MV_USB_CORE_CMD_RESET_MASK)
+		;
+
+	/* Set Mode register (Stop and Reset USB Core before) */
+	/* Stop the controller */
+	regVal = readl_relaxed(hcd->regs + 0x140);
+	regVal &= ~MV_USB_CORE_CMD_RUN_MASK;
+	writel_relaxed(regVal, hcd->regs + 0x140);
+
+	/* Reset the controller to get default values */
+	regVal = readl_relaxed(hcd->regs + 0x140);
+	regVal |= MV_USB_CORE_CMD_RESET_MASK;
+	writel_relaxed(regVal, hcd->regs + 0x140);
+
+	/* Wait for the controller reset to complete */
+	do {
+		regVal = readl_relaxed(hcd->regs + 0x140);
+	} while (regVal & MV_USB_CORE_CMD_RESET_MASK);
+
+	/* Set USB_MODE register */
+	regVal = MV_USB_CORE_MODE_HOST;
+	writel_relaxed(regVal, hcd->regs + 0x1A8);
+
+	return 0;
+}
+
+static void ehci_orion_drv_shutdown(struct platform_device *pdev)
+{
+	struct usb_hcd *hcd = platform_get_drvdata(pdev);
+	static void __iomem *usb_pwr_ctrl_base;
+	struct clk *clk;
+
+	usb_hcd_platform_shutdown(pdev);
+
+	usb_pwr_ctrl_base = hcd->regs + USB_PHY_PWR_CTRL;
+	BUG_ON(!usb_pwr_ctrl_base);
+	/* Power Down & PLL Power down */
+	writel((readl(usb_pwr_ctrl_base) & ~(BIT(0) | BIT(1))),
+	       usb_pwr_ctrl_base);
+
+	clk = clk_get(&pdev->dev, NULL);
+	if (!IS_ERR(clk)) {
+		clk_disable_unprepare(clk);
+		clk_put(clk);
+	}
+
+}
+
 static const struct of_device_id ehci_orion_dt_ids[] = {
 	{ .compatible = "marvell,orion-ehci", },
+	{ .compatible = "marvell,armada-3700-ehci", },
 	{},
 };
 MODULE_DEVICE_TABLE(of, ehci_orion_dt_ids);
@@ -317,7 +452,11 @@ MODULE_DEVICE_TABLE(of, ehci_orion_dt_ids);
 static struct platform_driver ehci_orion_driver = {
 	.probe		= ehci_orion_drv_probe,
 	.remove		= ehci_orion_drv_remove,
-	.shutdown	= usb_hcd_platform_shutdown,
+#ifdef CONFIG_PM
+	.suspend        = ehci_orion_drv_suspend,
+	.resume         = ehci_orion_drv_resume,
+#endif
+	.shutdown	= ehci_orion_drv_shutdown,
 	.driver = {
 		.name	= "orion-ehci",
 		.of_match_table = ehci_orion_dt_ids,

@@ -84,6 +84,7 @@ static int xhci_plat_probe(struct platform_device *pdev)
 	struct clk              *clk;
 	int			ret;
 	int			irq;
+	int			i;
 
 	if (usb_disabled())
 		return -ENODEV;
@@ -123,6 +124,8 @@ static int xhci_plat_probe(struct platform_device *pdev)
 	hcd->rsrc_start = res->start;
 	hcd->rsrc_len = resource_size(res);
 
+	xhci = hcd_to_xhci(hcd);
+
 	/*
 	 * Not all platforms have a clk so it is not an error if the
 	 * clock does not exists.
@@ -148,8 +151,6 @@ static int xhci_plat_probe(struct platform_device *pdev)
 
 	device_wakeup_enable(hcd->self.controller);
 
-	xhci = hcd_to_xhci(hcd);
-	xhci->clk = clk;
 	xhci->main_hcd = hcd;
 	xhci->shared_hcd = usb_create_shared_hcd(driver, &pdev->dev,
 			dev_name(&pdev->dev), hcd);
@@ -198,8 +199,10 @@ put_usb3_hcd:
 	usb_put_hcd(xhci->shared_hcd);
 
 disable_clk:
-	if (!IS_ERR(clk))
-		clk_disable_unprepare(clk);
+	for (i = 0; i < MAX_XHCI_CLOCKS; i++) {
+		if (!IS_ERR(xhci->clk[i]))
+			clk_disable_unprepare(xhci->clk[i]);
+	}
 
 put_hcd:
 	usb_put_hcd(hcd);
@@ -211,7 +214,7 @@ static int xhci_plat_remove(struct platform_device *dev)
 {
 	struct usb_hcd	*hcd = platform_get_drvdata(dev);
 	struct xhci_hcd	*xhci = hcd_to_xhci(hcd);
-	struct clk *clk = xhci->clk;
+	int i;
 
 	usb_remove_hcd(xhci->shared_hcd);
 	usb_phy_shutdown(hcd->usb_phy);
@@ -219,11 +222,19 @@ static int xhci_plat_remove(struct platform_device *dev)
 	usb_remove_hcd(hcd);
 	usb_put_hcd(xhci->shared_hcd);
 
-	if (!IS_ERR(clk))
-		clk_disable_unprepare(clk);
+	for (i = 0; i < MAX_XHCI_CLOCKS; i++) {
+		if (!IS_ERR(xhci->clk[i]))
+			clk_disable_unprepare(xhci->clk[i]);
+	}
+
 	usb_put_hcd(hcd);
 
 	return 0;
+}
+
+void xhci_plat_shutdown(struct platform_device *dev)
+{
+	xhci_plat_remove(dev);
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -280,8 +291,9 @@ static const struct acpi_device_id usb_xhci_acpi_match[] = {
 MODULE_DEVICE_TABLE(acpi, usb_xhci_acpi_match);
 
 static struct platform_driver usb_xhci_driver = {
-	.probe	= xhci_plat_probe,
-	.remove	= xhci_plat_remove,
+	.probe		= xhci_plat_probe,
+	.remove		= xhci_plat_remove,
+	.shutdown	= xhci_plat_shutdown,
 	.driver	= {
 		.name = "xhci-hcd",
 		.pm = DEV_PM_OPS,

@@ -162,6 +162,8 @@
 #define   SDHCI_CTRL_UHS_SDR104		0x0003
 #define   SDHCI_CTRL_UHS_DDR50		0x0004
 #define   SDHCI_CTRL_HS400		0x0005 /* Non-standard */
+#define   SDHCI_CTRL_HS200_ONLY		0x0005 /* Non-standard */
+#define   SDHCI_CTRL_HS400_ONLY		0x0006 /* Non-standard */
 #define  SDHCI_CTRL_VDD_180		0x0008
 #define  SDHCI_CTRL_DRV_TYPE_MASK	0x0030
 #define   SDHCI_CTRL_DRV_TYPE_B		0x0000
@@ -422,7 +424,10 @@ struct sdhci_host {
  * SD clock frequency or enabling back the internal clock.
  */
 #define SDHCI_QUIRK2_NEED_DELAY_AFTER_INT_CLK_RST	(1<<16)
-
+/* Some host controller separates HS200 and HS400 definitions */
+#define SDHCI_QUIRK2_TIMING_HS200_HS400			(1<<17)
+/* Some host controller does not support tuning in DDR50 mode */
+#define SDHCI_QUIRK2_BROKEN_DDR50_TUNING		(1<<18)
 	int irq;		/* Device IRQ */
 	void __iomem *ioaddr;	/* Mapped address */
 
@@ -553,6 +558,9 @@ struct sdhci_ops {
 					 struct mmc_card *card,
 					 unsigned int max_dtr, int host_drv,
 					 int card_drv, int *drv_type);
+	void	(*voltage_switch_pre)(struct sdhci_host *host);
+	int	(*delay_adj)(struct sdhci_host *host, struct mmc_ios *ios);
+	void	(*init_card)(struct sdhci_host *host, struct mmc_card *card);
 };
 
 #ifdef CONFIG_MMC_SDHCI_IO_ACCESSORS

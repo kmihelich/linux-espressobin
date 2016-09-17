@@ -438,6 +438,8 @@ mv64xxx_i2c_read_offload_rx_data(struct mv64xxx_i2c_data *drv_data,
 
 	buf[0] = readl(drv_data->reg_base + MV64XXX_I2C_REG_RX_DATA_LO);
 	buf[1] = readl(drv_data->reg_base + MV64XXX_I2C_REG_RX_DATA_HI);
+	buf[0] = le32_to_cpu(buf[0]);
+	buf[1] = le32_to_cpu(buf[1]);
 
 	memcpy(msg->buf, buf, msg->len);
 }
@@ -592,9 +594,11 @@ static void
 mv64xxx_i2c_prepare_tx(struct mv64xxx_i2c_data *drv_data)
 {
 	struct i2c_msg *msg = drv_data->msgs;
-	u32 buf[2];
+	u32 buf[2] = {0};
 
 	memcpy(buf, msg->buf, msg->len);
+	buf[0] = cpu_to_le32(buf[0]);
+	buf[1] = cpu_to_le32(buf[1]);
 
 	writel(buf[0], drv_data->reg_base + MV64XXX_I2C_REG_TX_DATA_LO);
 	writel(buf[1], drv_data->reg_base + MV64XXX_I2C_REG_TX_DATA_HI);
@@ -807,7 +811,7 @@ mv64xxx_of_config(struct mv64xxx_i2c_data *drv_data,
 #else
 	const struct of_device_id *device;
 	struct device_node *np = dev->of_node;
-	u32 bus_freq, tclk;
+	u32 bus_freq, tclk, timeout;
 	int rc = 0;
 
 	if (IS_ERR(drv_data->clk)) {
@@ -839,10 +843,10 @@ mv64xxx_of_config(struct mv64xxx_i2c_data *drv_data,
 		reset_control_deassert(drv_data->rstc);
 	}
 
-	/* Its not yet defined how timeouts will be specified in device tree.
-	 * So hard code the value to 1 second.
-	 */
-	drv_data->adapter.timeout = HZ;
+	if (of_property_read_u32(np, "timeout-ms", &timeout))
+		timeout = 1000; /* 1000ms by default */
+	drv_data->adapter.timeout = msecs_to_jiffies(timeout);
+
 
 	device = of_match_device(mv64xxx_i2c_of_match_table, dev);
 	if (!device)
@@ -994,9 +998,21 @@ mv64xxx_i2c_remove(struct platform_device *dev)
 	return 0;
 }
 
+static int mv64xxx_i2c_resume(struct platform_device *dev)
+{
+	struct mv64xxx_i2c_data *drv_data = platform_get_drvdata(dev);
+
+	mv64xxx_i2c_hw_init(drv_data);
+
+	return 0;
+}
+
 static struct platform_driver mv64xxx_i2c_driver = {
 	.probe	= mv64xxx_i2c_probe,
 	.remove	= mv64xxx_i2c_remove,
+#ifdef CONFIG_PM
+	.resume = mv64xxx_i2c_resume,
+#endif
 	.driver	= {
 		.name	= MV64XXX_I2C_CTLR_NAME,
 		.of_match_table = mv64xxx_i2c_of_match_table,
